@@ -86,7 +86,7 @@ end
 end
 
 @generated ∂(ω::Chain{V,1,<:Chain{W,1}}) where {V,W} = :(∧(ω)⋅$(Λ(W).v1))
-∂(ω::T) where T<:TensorAlgebra = ω⋅Manifold(ω)(∇)
+∂(ω::T) where T<:TensorAlgebra = ω⋅Manifold(ω)(∇) #jacobian?
 d(ω::T) where T<:TensorAlgebra = Manifold(ω)(∇)∧ω
 δ(ω::T) where T<:TensorAlgebra = -∂(ω)
 
@@ -234,7 +234,7 @@ function skeleton(x::MultiVector{V},v::Val{T}=Val{true}()) where {V,T}
 end
 
 # mesh
-
+"""Initialize points as a chain that represents the points; T represents connectivity and is unused here except for typechecking"""
 initpoints(P::T) where T<:AbstractVector = Chain{ℝ2,1}.(1.0,P)
 initpoints(P::T) where T<:AbstractRange = Chain{ℝ2,1}.(1.0,P)
 @generated function initpoints(P,::Val{n}=Val(size(P,1))) where n
@@ -242,11 +242,13 @@ initpoints(P::T) where T<:AbstractRange = Chain{ℝ2,1}.(1.0,P)
          Expr(:tuple,1.0,[:(P[$k,:]) for k ∈ 1:n]...))
 end
 
+"""Initializes points' data as a chain bundle that represents the points"""
 function initpointsdata(P,E,N::Val{n}=Val(size(P,1))) where n
     p = ChainBundle(initpoints(P,N)); l = list(1,n)
     p,[Chain{↓(p),1}(Int.(E[l,k])) for k ∈ 1:size(E,2)]
 end
 
+"""Initializes points and their connectivities as a larger chain bundle (i.e. mesh) t"""
 function initmeshdata(P,E,T,N::Val{n}=Val(size(P,1))) where n
     p,e = initpointsdata(P,E,N); l = list(1,n+1)
     t = [Chain{p,1}(Int.(T[l,k])) for k ∈ 1:size(T,2)]
@@ -255,11 +257,22 @@ end
 
 export pointset, edges, facets, adjacency, column, columns
 
+"""Describes columns and rows of mesh matrix.
+Input:
+t: mesh
+i: starting index (1)
+j: ending index (dimensions of manifold)
+
+Output:
+Value of t at index?"""
 column(t,i=1) = getindex.(value(t),i)
 columns(t,i=1,j=mdims(Manifold(t))) = column.(Ref(value(t)),list(i,j))
 
 rows(a::T) where T<:AbstractMatrix = getindex.(Ref(a),list(1,3),:)
 
+"""points of e: If manifold dimension is 1, then e is a point.
+
+Otherwise, take each value in e, and push them to the output."""
 function pointset(e)
     mdims(Manifold(e)) == 1 && (return column(e))
     out = Int[]
@@ -271,7 +284,9 @@ function pointset(e)
     return out
 end
 
+#complement of adjacency list?
 antiadjacency(t::ChainBundle,cols=columns(t)) = (A = sparse(t,cols); A-transpose(A))
+#adjacency list?
 adjacency(t,cols=columns(t)) = (A = sparse(t,cols); A+transpose(A))
 function SparseArrays.sparse(t,cols=columns(t))
     np,N = length(points(t)),mdims(Manifold(t))
@@ -282,6 +297,10 @@ function SparseArrays.sparse(t,cols=columns(t))
     return A
 end
 
+"""Generates the edges; simple chains made of the adjacency list.
+
+If manifold t is dimension 2, it's an edge, return it.
+Otherwise, find the nonzero adjacent points i.e. any two points with an adjacency?"""
 edges(t,cols::Values) = edges(t,adjacency(t,cols))
 function edges(t,adj=adjacency(t))
     mdims(t) == 2 && (return t)
@@ -290,6 +309,16 @@ function edges(t,adj=adjacency(t))
     [Chain{M,1}(Values{2,Int}(f[n].I)) for n ∈ 1:length(f)]
 end
 
+"""Facets are N dimensional faces of an N+1 dimensional polytope
+
+If N is 0, Facets are vertices (same dimensions as point)
+
+Otherwise,
+
+out = chain of appropriate dimension
+for each chain i in manifold t, check if there is a facet, find if its transformed value is still w? 
+    
+If it is, that determines that side of the facet is on the outside?"""
 function facetsinterior(t::Vector{<:Chain{V}}) where V
     N = mdims(Manifold(t))-1
     W = V(list(2,N+1))
@@ -309,6 +338,36 @@ facets(t,h) = faces(t,h,Val(mdims(Manifold(t))-1))
 faces(t,v::Val) = faces(value(t),v)
 faces(t,h,v,g=identity) = faces(value(t),h,v,g)
 faces(t::Tuple,v,g=identity) = faces(t[1],t[2],v,g)
+
+"""Returns the faces of the vector.
+
+A face is defined as an intersection of a polytope P with a halfspace (literally half of the space) whose boundary is disjoint with 
+the interior of P.
+
+A similar but not rigorous definition: It's an intersection of the "exterior" of P and a hyperplane.
+
+I *think* this can be more rigorously defined if "exterior" is considered the set of points where P would be open if these points are 
+removed.
+
+Input:
+
+t: Mesh embedded in N dimensional manifold
+
+If t is full dimensional, return t (it's already a chain which contains all its faces properly)
+
+Otherwise if N is 2, then t is at most 2 dimensional and the edges (1 dimensional faces) are all but the trivial and empty face, so return it.
+    
+If N is 1, then t is exactly a 1 dimensional chain; return that chain.
+
+If N is 0, then t is a point; return that chain.
+
+Otherwise, 
+
+Output:
+
+out = chain of appropriate dimension
+
+for each sub chain i in manifold t, check if it is a face. If it is, push to output unless it's already there."""
 function faces(t::Vector{<:Chain{V}},::Val{N}) where {V,N}
     N == mdims(V) && (return t)
     N == 2 && (return edges(t))
@@ -323,6 +382,9 @@ function faces(t::Vector{<:Chain{V}},::Val{N}) where {V,N}
     end
     return out
 end
+
+"""As above, except additional argument g is included. Really no idea what bnd is, but if "identity" is the identity function
+then it looks like this is some efficiency boosting specific example where parity is used to cancel some things."""
 function faces(t::Vector{<:Chain{V}},h,::Val{N},g=identity) where {V,N}
     W = V(list(1,N))
     N == 0 && (return [Chain{W,1}(list(1,N))],Int[sum(h)])
@@ -348,6 +410,7 @@ function faces(t::Vector{<:Chain{V}},h,::Val{N},g=identity) where {V,N}
     return out,bnd
 end
 
+#set up jacobians of chains for generation of gradient fields?
 ∂(t::ChainBundle) = ∂(value(t))
 ∂(t::Values{N,<:Tuple}) where N = ∂.(t)
 ∂(t::Values{N,<:Vector}) where N = ∂.(t)
@@ -365,6 +428,7 @@ export scalarfield, vectorfield, chainfield, rectanglefield # rectangle
 
 function pointfield end; const vectorfield = pointfield # deprecate ?
 
+#I'm gonna stop here?
 chainfield(t,V=Manifold(t),W=V) = p->V(vector(↓(↑((V∪Manifold(t))(p))⊘t)))
 function scalarfield(t,ϕ::T) where T<:AbstractVector
     M = Manifold(t)
