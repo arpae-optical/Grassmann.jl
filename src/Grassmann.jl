@@ -38,10 +38,9 @@ include("forms.jl")
 
 ## fundamentals
 
-export cayley, hyperplanes, points, TensorAlgebra
+export hyperplanes, points, TensorAlgebra
 
-cayley(x) = (y=Vector(Λ(x).b); y*transpose(y))
-
+#hyperplane with n dimensions in manifold V gets n dimensional basis
 @pure hyperplanes(V::Manifold) = map(n->UniformScaling{Bool}(false)*getbasis(V,1<<n),0:rank(V)-1-diffvars(V))
 
 for M ∈ (:Signature,:DiagonalForm)
@@ -61,9 +60,14 @@ for T ∈ (:(Chain{V}),:(MultiVector{V}))
         *(a::$T,b::Derivation) where V = a*V(b)
     end
 end
+
 ⊘(x::T,y::Derivation) where T<:TensorAlgebra{V} where V = x⊘V(y)
 ⊘(x::Derivation,y::T) where T<:TensorAlgebra{V} where V = V(x)⊘y
 
+"""Returns simple chain if O is full dimensional or 0 dimensional, 
+else if O is 1 dimensional returns ∇, 
+else if odd returns sum of low dimensional bases, 
+else returns x = (∇⋅∇)^div(O,2)."""
 @pure function (V::Signature{N})(d::Leibniz.Derivation{T,O}) where {N,T,O}
     (O<1||diffvars(V)==0) && (return Chain{V,1,Int}(d.v.λ*ones(Values{N,Int})))
     G,D,C = grade(V),diffvars(V)==1,isdyadic(V)
@@ -74,6 +78,8 @@ end
     isodd(O) ? sum([(x*getbasis(V,1<<(k+G)))*getbasis(V,1<<k) for k ∈ 0:G2]) : x
 end
 
+
+#same idea, submanifold instead of signature; presumably more info = more speed
 @pure function (M::SubManifold{W,N})(d::Leibniz.Derivation{T,O}) where {W,N,T,O}
     V = isbasis(M) ? W : M
     (O<1||diffvars(V)==0) && (return Chain{V,1,Int}(d.v.λ*ones(Values{N,Int})))
@@ -85,11 +91,15 @@ end
     isodd(O) ? sum([(x*getbasis(V,1<<(k+G)))*getbasis(V,1<<k) for k ∈ 0:G2]) : x
 end
 
+#three ds, sure, whatever
 @generated ∂(ω::Chain{V,1,<:Chain{W,1}}) where {V,W} = :(∧(ω)⋅$(Λ(W).v1))
-∂(ω::T) where T<:TensorAlgebra = ω⋅Manifold(ω)(∇) #jacobian?
+∂(ω::T) where T<:TensorAlgebra = ω⋅Manifold(ω)(∇)
 d(ω::T) where T<:TensorAlgebra = Manifold(ω)(∇)∧ω
 δ(ω::T) where T<:TensorAlgebra = -∂(ω)
 
+
+#reminder: Rank is dimension of space spanned by basis. Rank of mapping is rank of derivative of the mapping. Looks like the assumption is the map has constant rank
+"""calculates rank of boundary of map t between manifolds"""
 function boundary_rank(t,d=gdims(t))
     out = gdims(∂(t))
     out[1] = 0
@@ -99,6 +109,7 @@ function boundary_rank(t,d=gdims(t))
     return Values(out)
 end
 
+"""calculates rank of null space of map t between manifolds?"""
 function boundary_null(t)
     d = gdims(t)
     r = boundary_rank(t,d)
@@ -126,6 +137,7 @@ function betti(t::T) where T<:TensorAlgebra
     return Values(out)
 end
 
+"""returns type of tensor algebra?"""
 @generated function ↑(ω::T) where T<:TensorAlgebra
     V = Manifold(ω)
     T<:SubManifold && !isbasis(ω) && (return Leibniz.supermanifold(V))
@@ -142,6 +154,7 @@ end
         end
     end
 end
+
 ↑(ω::ChainBundle) = ω
 function ↑(ω,b)
     ω2 = (~ω)⋅ω # ω^2
@@ -186,6 +199,8 @@ absym(t::MultiVector{V,T}) where {V,T} = MultiVector{V}(absym.(value(t)))
 
 collapse(a,b) = a⋅absym(∂(b))
 
+# generates chain recursively? If the base state (g = 1, where g is dimension?) then return the input. If 2 multivector, just record one of two things (v if it's 2, -v if it's over 2 but some
+# measure of symmetry T is 2). Otherwise, similar indexing for all dimensions down to 2.
 function chain(t::S,::Val{T}=Val{true}()) where S<:TensorTerm{V} where {V,T}
     N,B,v = mdims(V),UInt(basis(t)),value(t)
     C = symmetricmask(V,B,B)[1]
@@ -205,6 +220,10 @@ path(t) = chain(t,Val{false}())
 @inline (::Leibniz.Derivation)(x::T,v=Val{true}()) where T<:TensorAlgebra = skeleton(x,v)
 𝒫(t::T) where T<:TensorAlgebra = Δ(t,Val{false}())
 subcomplex(x::S,v=Val{true}()) where S<:TensorAlgebra = Δ(absym(∂(x)),v)
+
+"""
+Breaks simplex into subsimplices recursively
+"""
 function skeleton(x::S,v::Val{T}=Val{true}()) where S<:TensorTerm{V} where {V,T}
     B = UInt(basis(x))
     count_ones(symmetricmask(V,B,B)[1])>0 ? absym(x)+skeleton(absym(∂(x)),v) : (T ? g_zero(V) : absym(x))
@@ -233,7 +252,7 @@ function skeleton(x::MultiVector{V},v::Val{T}=Val{true}()) where {V,T}
     return g
 end
 
-# mesh
+# mesh stuff begins
 """Initialize points as a chain that represents the points; T represents connectivity and is unused here except for typechecking"""
 initpoints(P::T) where T<:AbstractVector = Chain{ℝ2,1}.(1.0,P)
 initpoints(P::T) where T<:AbstractRange = Chain{ℝ2,1}.(1.0,P)
